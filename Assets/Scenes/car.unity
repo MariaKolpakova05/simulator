@@ -622,6 +622,7 @@ Transform:
   m_LocalScale: {x: 0.6472, y: 0.21829, z: 0.83491504}
   m_ConstrainProportionsScale: 0
   m_Children:
+  - {fileID: 1968275312}
   - {fileID: 157765917}
   - {fileID: 1281484964}
   - {fileID: 1618518049}
@@ -655,6 +656,8 @@ MonoBehaviour:
   _frictionCoefficient: 1
   _lateralStiffnes: 80
   _rolingResistance: 0.5
+  _handbrakeDragMultiplier: 10
+  _handbrakeReleaseSmoothness: 10
 --- !u!54 &1152157418
 Rigidbody:
   m_ObjectHideFlags: 0
@@ -663,7 +666,7 @@ Rigidbody:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1152157412}
   serializedVersion: 4
-  m_Mass: 100
+  m_Mass: 70
   m_Drag: 0
   m_AngularDrag: 0.05
   m_CenterOfMass: {x: 0, y: 0, z: 0}
@@ -1005,13 +1008,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1968275309}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: -4.4, y: 26.9, z: -5.9}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalRotation: {x: 0.2110697, y: -0.18785001, z: 0.041372243, w: 0.95835817}
+  m_LocalPosition: {x: 11.70612, y: 16.006233, z: -5.91677}
+  m_LocalScale: {x: 1.4837822, y: 3.1017842, z: 1.4203405}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 90, y: 0, z: 0}
+  m_Father: {fileID: 1152157416}
+  m_LocalEulerAnglesHint: {x: 24.841, y: -22.18, z: 0}
 --- !u!114 &1968275313
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1269,8 +1272,8 @@ Transform:
   m_GameObject: {fileID: 2065852395}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -4.7890754, y: 0.34092245, z: 5.2554}
-  m_LocalScale: {x: 1, y: 1, z: 4.1074}
+  m_LocalPosition: {x: -4.7890754, y: 0.34092245, z: 115.5}
+  m_LocalScale: {x: 1, y: 1, z: 26.17263}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -1279,7 +1282,6 @@ Transform:
 SceneRoots:
   m_ObjectHideFlags: 0
   m_Roots:
-  - {fileID: 1968275312}
   - {fileID: 1734839645}
   - {fileID: 1152157416}
   - {fileID: 2065852399}

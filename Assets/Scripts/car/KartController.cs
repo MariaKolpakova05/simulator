@@ -22,20 +22,41 @@ public class KartController : MonoBehaviour
     [SerializeField] private float _wheelRadius = 0.3f;
     [SerializeField] private float _maxSpeed = 20;
 
-    [Header("Stering")]
-    [SerializeField] private float _maxSteeringAngle = 30f;
-    //запоминаем позицию передних колес
-
-    [Header("friction")]
+    [Header("Steering")]
+    [SerializeField] private float _maxSteeringAngle = 30f; //запоминаем позицию передних колес
+    
+    [Header("Friction")]
     [SerializeField] private float _frictionCoefficient = 1.0f; //коэффициент трения
-    [SerializeField] private float _lateralStiffnes  = 80f; //жёсткость шины по углу скольжения
+    [SerializeField] private float _lateralStiffnes = 80f; //жёсткость шины по углу скольжения
     //какую боковую силу создает шина при малом боковом скольжении
     [SerializeField] private float _rolingResistance = 0.5f;
+    
+    [Header("Handbrake")]
+    [SerializeField] private float _handbrakeDragMultiplier = 5f;
+    [SerializeField] private float _handbrakeReleaseSmoothness = 5f;
+    
+    // Телеметрия
+    private Vector3 _velocity;
+    private float _speedKmh;
+    private float _speedMs;
+    private float _totalFxRear;
+    private float _totalFyFront;
+    private float _frontLeftVLat;
+    private float _frontRightVLat;
+    private float _rearLeftVLat;
+    private float _rearRightVLat;
+    
+    // Handbrake
+    private float _currentRearLateralStiffness;
+    private float _currentRearRollingResistance;
+    private bool _isHandbrakeActive;
+    
     private Quaternion _frontLeftInitialLocalRot;
     private Quaternion _frontRightInitialLocalRot;
     private Rigidbody _rigidbody;
 
     private InputAction _moveAction;
+    private InputAction _handbrakeAction;
     private float _throttleInput;
     private float _steepInput;
 
@@ -49,10 +70,14 @@ public class KartController : MonoBehaviour
         _rigidbody = GetComponent<Rigidbody>();
         var map = _playerInput.FindActionMap("Kart");
         _moveAction = map.FindAction("Move");
+        _handbrakeAction = map.FindAction("Handbrake");
 
         _frontLeftInitialLocalRot = _frontLeftWheel.localRotation;
         _frontRightInitialLocalRot = _frontRightWheel.localRotation;
 
+        //инициализация параметров ручного тормоза
+        _currentRearLateralStiffness = _lateralStiffnes;
+        _currentRearRollingResistance = _rolingResistance;
     }
 
     private void Start()
@@ -63,33 +88,57 @@ public class KartController : MonoBehaviour
     private void OnEnable()
     {
         _playerInput.Enable();
-        
     }
 
     private void OnDisable()
     {
         _playerInput.Disable();
-        
     }
 
     private void ReadInput()
     {
         Vector2 move = _moveAction.ReadValue<Vector2>();
-        _steepInput = Mathf.Clamp(move.x,-1,1);
-        _throttleInput = Mathf.Clamp(move.y,-1,1);
+        _steepInput = Mathf.Clamp(move.x, -1, 1);
+        _throttleInput = Mathf.Clamp(move.y, -1, 1);
         
+        //чтение ручного тормоза
+        _isHandbrakeActive = _handbrakeAction.ReadValue<float>() > 0.5f;
+        
+        //обновление параметров задних колес при ручном тормозе
+        if (_isHandbrakeActive)
+        {
+            _currentRearLateralStiffness = 0f; //убираем боковую жесткость
+            _currentRearRollingResistance = _rolingResistance * _handbrakeDragMultiplier;
+        }
+        else
+        {
+            //плавное восстановление параметров
+            _currentRearLateralStiffness = Mathf.Lerp(
+                _currentRearLateralStiffness, 
+                _lateralStiffnes, 
+                Time.deltaTime * _handbrakeReleaseSmoothness
+            );
+            _currentRearRollingResistance = Mathf.Lerp(
+                _currentRearRollingResistance, 
+                _rolingResistance, 
+                Time.deltaTime * _handbrakeReleaseSmoothness
+            );
+        }
     }
 
     private void Update()
     {
         ReadInput();
         RotateFrontWheel();
+        
+        //обновление телеметрии
+        UpdateTelemetry();
     }
 
     private void RotateFrontWheel()
     {
-        float steerAngle = _maxSteeringAngle*_steepInput;
-        Quaternion steerRotation = Quaternion.Euler(0,steerAngle,0);
+        float steerAngle = _maxSteeringAngle * _steepInput;
+        Quaternion steerRotation = Quaternion.Euler(0, steerAngle, 0);
 
         _frontLeftWheel.localRotation = _frontLeftInitialLocalRot * steerRotation;
         _frontRightWheel.localRotation = _frontRightInitialLocalRot * steerRotation;
@@ -98,10 +147,10 @@ public class KartController : MonoBehaviour
     private void ComputeStaticWheelLoad()
     {
         float mass = _rigidbody.mass;
-        float totalWeight = mass*Mathf.Abs(Physics.gravity.y);
+        float totalWeight = mass * Mathf.Abs(Physics.gravity.y);
 
-        float frontWeight = totalWeight*_fontAxisShare;
-        float rearWeight = totalWeight*(1-_fontAxisShare);
+        float frontWeight = totalWeight * _fontAxisShare;
+        float rearWeight = totalWeight * (1 - _fontAxisShare);
 
         _frontRightNormalForce = frontWeight * 0.5f;
         _frontLeftNormalForce = frontWeight * 0.5f;
@@ -111,30 +160,34 @@ public class KartController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        ApplyEngineForced();
-        ApplyWheelForce(_frontLeftWheel,_frontLeftNormalForce,
-        isSteer: true, isDriven:false);
-        ApplyWheelForce(_frontRightWheel,_frontRightNormalForce,
-        isSteer: true, isDriven:false);
-        ApplyWheelForce(_rearLeftWheel,_rearLeftNormalForce,
-        isSteer: false, isDriven:true);
-        ApplyWheelForce(_rearRightWheel,_rearRightNormalForce,
-        isSteer: false, isDriven:true);
-
+        //обнуляем суммарные силы для телеметрии
+        _totalFxRear = 0f;
+        _totalFyFront = 0f;
         
+        ApplyEngineForced();
+        ApplyWheelForce(_frontLeftWheel, _frontLeftNormalForce, true, false, _lateralStiffnes, _rolingResistance);
+        ApplyWheelForce(_frontRightWheel, _frontRightNormalForce, true, false, _lateralStiffnes, _rolingResistance);
+        ApplyWheelForce(_rearLeftWheel, _rearLeftNormalForce, false, true, _currentRearLateralStiffness, _currentRearRollingResistance);
+        ApplyWheelForce(_rearRightWheel, _rearRightNormalForce, false, true, _currentRearLateralStiffness, _currentRearRollingResistance);
     }
 
-    private void ApplyWheelForce(Transform wheel, float normalForce, bool isSteer, bool isDriven)
+    private void ApplyWheelForce(Transform wheel, float normalForce, bool isSteer, bool isDriven, float lateralStiffness, float rollingResistance)
     {
         Vector3 wheelPos = wheel.position;
         Vector3 wheelForward = wheel.forward;
         Vector3 wheelRight = wheel.right;
-    
+
         //скорость точки колеса в мировых координатах
         Vector3 velocity = _rigidbody.GetPointVelocity(wheelPos);
 
         float vLong = Vector3.Dot(velocity, wheelForward);
         float vLat = Vector3.Dot(velocity, wheelRight);
+        
+        //сохранение vLat для телеметрии
+        if (wheel == _frontLeftWheel) _frontLeftVLat = vLat;
+        if (wheel == _frontRightWheel) _frontRightVLat = vLat;
+        if (wheel == _rearLeftWheel) _rearLeftVLat = vLat;
+        if (wheel == _rearRightWheel) _rearRightVLat = vLat;
 
         float Fx = 0f;
         float Fy = 0f;
@@ -143,7 +196,7 @@ public class KartController : MonoBehaviour
         {
             Vector3 bodyForward = transform.forward;
             float speedAlongForward = Vector3.Dot(_rigidbody.linearVelocity, bodyForward);
-        
+
             //ограничение скорости вперед
             if (!(_throttleInput > 0 && speedAlongForward > _maxSpeed))
             {
@@ -154,26 +207,32 @@ public class KartController : MonoBehaviour
                 );
 
                 float totalWheelTorque = engineTorque * _gearRatio * _drivetrainEfficiency;
-                float wheelTorque = totalWheelTorque * 0.5f; // два задних колеса
+                float wheelTorque = totalWheelTorque * 0.5f;
                 Fx += wheelTorque / _wheelRadius;
             }
 
-            float rolling = -_rolingResistance * vLong;
+            float rolling = -rollingResistance * vLong;
             Fx += rolling;
         }
         else
         {
             //на неведущих колесах тоже может быть сопротивление качению
-            float rolling = -_rolingResistance * vLong;
+            float rolling = -rollingResistance * vLong;
             Fx += rolling;
         }
     
         //боковая сила шин
-        float FyRaw = -_lateralStiffnes * vLat; // ИСПРАВЛЕНО: должно быть vLat, а не vLong
+        float FyRaw = -lateralStiffness * vLat;
         Fy += FyRaw;
+        
+        //суммирование сил для телеметрии
+        if (isDriven) //задние колеса
+            _totalFxRear += Fx;
+        else //передние колеса
+            _totalFyFront += Fy;
 
         float frictionLimit = _frictionCoefficient * normalForce;
-        float forceLength = Mathf.Sqrt(Fx * Fx + Fy * Fy); // ИСПРАВЛЕНО: Fx*Fx + Fy*Fy
+        float forceLength = Mathf.Sqrt(Fx * Fx + Fy * Fy);
 
         if (forceLength > frictionLimit)
         {
@@ -182,10 +241,8 @@ public class KartController : MonoBehaviour
             Fx *= scale;
         }
 
-        
         Vector3 totalForce = wheelForward * Fx + wheelRight * Fy;
         _rigidbody.AddForceAtPosition(totalForce, wheelPos, ForceMode.Force);
-
     }
 
     private void ApplyEngineForced()
@@ -193,27 +250,80 @@ public class KartController : MonoBehaviour
         Vector3 forward = transform.forward;
         float speedAlongForward = Vector3.Dot(_rigidbody.linearVelocity, forward);
 
-        if (_throttleInput>0 && speedAlongForward> _maxSpeed)
+        if (_throttleInput > 0 && speedAlongForward > _maxSpeed)
             return;
 
-        if (_throttleInput < 0 && speedAlongForward < -_maxSpeed * 0.5f) // задний ход медленнее
-        return;
+        if (_throttleInput < 0 && speedAlongForward < -_maxSpeed * 0.5f) //задний ход медленнее
+            return;
 
         float driveTorque = _engine.Simulate(
-                _throttleInput,
-                speedAlongForward,
-                Time.fixedDeltaTime
-                );
+            _throttleInput,
+            speedAlongForward,
+            Time.fixedDeltaTime
+        );
 
-        float driveForcePerWheel = driveTorque/_wheelRadius/2f;
+        float driveForcePerWheel = driveTorque / _wheelRadius / 2f;
 
         Vector3 forceRearLeft = forward * driveForcePerWheel;
         Vector3 forceRearRight = forward * driveForcePerWheel;
 
         _rigidbody.AddForceAtPosition(forceRearLeft, _rearLeftWheel.position, ForceMode.Force);
         _rigidbody.AddForceAtPosition(forceRearRight, _rearRightWheel.position, ForceMode.Force);
-
     }
-
-
+    
+    private void UpdateTelemetry()
+    {
+        _velocity = _rigidbody.linearVelocity;
+        _speedMs = _velocity.magnitude;
+        _speedKmh = _speedMs * 3.6f;
+    }
+    
+    private void OnGUI()
+    {
+        GUI.Box(new Rect(10, 10, 300, 240), "Kart Telemetry");
+        
+        GUIStyle labelStyle = new GUIStyle(GUI.skin.label);
+        labelStyle.fontSize = 12;
+        labelStyle.normal.textColor = Color.white;
+        
+        int yPos = 35;
+        int lineHeight = 20;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Speed: {_speedKmh:F1} km/h ({_speedMs:F2} m/s)", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RPM: {_engine.CurrentRpm:F0}", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Engine Torque: {_engine.CurrentTorque:F1} N·m", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Rear Axle Fx: {_totalFxRear:F1} N", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Front Axle Fy: {_totalFyFront:F1} N", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Lateral Slip:", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(30, yPos, 130, 20), $"FL: {_frontLeftVLat:F2} m/s", labelStyle);
+        GUI.Label(new Rect(160, yPos, 130, 20), $"FR: {_frontRightVLat:F2} m/s", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(30, yPos, 130, 20), $"RL: {_rearLeftVLat:F2} m/s", labelStyle);
+        GUI.Label(new Rect(160, yPos, 130, 20), $"RR: {_rearRightVLat:F2} m/s", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Handbrake: {(_isHandbrakeActive ? "ACTIVE" : "inactive")}", 
+            new GUIStyle(labelStyle) { 
+                normal = { textColor = _isHandbrakeActive ? Color.red : Color.green } 
+            });
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Throttle: {(_throttleInput * 100):F0}%", labelStyle);
+        yPos += lineHeight;
+        
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Steering: {(_steepInput * 100):F0}%", labelStyle);
+    }
 }

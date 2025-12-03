@@ -13,6 +13,15 @@
                     "processors": "",
                     "interactions": "",
                     "initialStateCheck": true
+                },
+                {
+                    "name": "Handbrake",
+                    "type": "Button",
+                    "id": "a34c7cd9-4a44-4c01-aff0-67cd26da1adc",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
                 }
             ],
             "bindings": [
@@ -70,6 +79,17 @@
                     "action": "Move",
                     "isComposite": false,
                     "isPartOfComposite": true
+                },
+                {
+                    "name": "",
+                    "id": "91cca4e3-a95d-46a0-b408-d40b9cad69f3",
+                    "path": "<Keyboard>/space",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "",
+                    "action": "Handbrake",
+                    "isComposite": false,
+                    "isPartOfComposite": false
                 }
             ]
         },
