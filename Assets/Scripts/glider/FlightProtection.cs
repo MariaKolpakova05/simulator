@@ -29,7 +29,7 @@ public class FlightProtection : MonoBehaviour
 
 
     [SerializeField] private float _stallAoa = 17;
-    [SerializeField] private float _stallFade = 3;
+    /*[SerializeField] private float _stallFade = 3;*/
 
     [Header("Turbulence (optional)")]
     [SerializeField]

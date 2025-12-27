@@ -15,7 +15,7 @@ public class FlightController : MonoBehaviour
     [SerializeField] private Vector3 _kd = new Vector3(0.8f, 0.6f, 0.9f);
 
     [SerializeField] private Vector3 _maxTorque = new Vector3(30, 25, 35);
-    [SerializeField] private float _deadZone = 0.05f;
+    /*[SerializeField] private float _deadZone = 0.05f;*/
     [SerializeField] private Vector2 _attHoldKp = new Vector2(2, 2);
     [SerializeField] private float _attHoldMaxRate = 45f;
 

@@ -46,6 +46,16 @@ public class KartController : MonoBehaviour
     private float _rearLeftVLat;
     private float _rearRightVLat;
     
+    // Ссылки на другие компоненты для телеметрии
+    private CarSuspension _carSuspension;
+    private KartAero _kartAero;
+    
+    // Данные подвески для телеметрии
+    private float[] _suspensionForces = new float[4]; // FL, FR, RL, RR
+    private float[] _wheelToGroundDistances = new float[4];
+    private float[] _suspensionCompressions = new float[4];
+    private float _centerOfMassHeight;
+    
     // Handbrake
     private float _currentRearLateralStiffness;
     private float _currentRearRollingResistance;
@@ -78,6 +88,10 @@ public class KartController : MonoBehaviour
         //инициализация параметров ручного тормоза
         _currentRearLateralStiffness = _lateralStiffnes;
         _currentRearRollingResistance = _rolingResistance;
+        
+        // Получаем ссылки на другие компоненты
+        _carSuspension = GetComponent<CarSuspension>();
+        _kartAero = GetComponent<KartAero>();
     }
 
     private void Start()
@@ -133,6 +147,49 @@ public class KartController : MonoBehaviour
         
         //обновление телеметрии
         UpdateTelemetry();
+        
+        // Обновление данных подвески
+        UpdateSuspensionData();
+    }
+
+    private void UpdateSuspensionData()
+    {
+        // Получаем данные о высоте центра масс
+        _centerOfMassHeight = transform.position.y;
+        
+        // Обновляем данные подвески через Raycast
+        UpdateWheelSuspensionData(_frontLeftWheel, 0, -_frontLeftWheel.up);
+        UpdateWheelSuspensionData(_frontRightWheel, 1, -_frontRightWheel.up);
+        UpdateWheelSuspensionData(_rearLeftWheel, 2, -_rearLeftWheel.up);
+        UpdateWheelSuspensionData(_rearRightWheel, 3, -_rearRightWheel.up);
+    }
+    
+    private void UpdateWheelSuspensionData(Transform wheel, int index, Vector3 direction)
+    {
+        // Логика получения данных о подвеске аналогична CarSuspension.SimulateWheel
+        float restLength = 0.4f; // Должно совпадать с CarSuspension
+        float springTravel = 0.2f;
+        float wheelRadius = 0.35f;
+        
+        Vector3 origin = wheel.position;
+        float maxDist = restLength + springTravel + wheelRadius;
+        
+        if (Physics.Raycast(origin, direction, out RaycastHit hit, maxDist))
+        {
+            float currentLength = hit.distance - wheelRadius;
+            currentLength = Mathf.Clamp(currentLength, restLength - springTravel, restLength + springTravel);
+            
+            // Сохраняем расстояние до земли
+            _wheelToGroundDistances[index] = hit.distance;
+            
+            // Сохраняем сжатие подвески
+            _suspensionCompressions[index] = restLength - currentLength;
+        }
+        else
+        {
+            _wheelToGroundDistances[index] = float.MaxValue;
+            _suspensionCompressions[index] = 0f;
+        }
     }
 
     private void RotateFrontWheel()
@@ -243,6 +300,12 @@ public class KartController : MonoBehaviour
 
         Vector3 totalForce = wheelForward * Fx + wheelRight * Fy;
         _rigidbody.AddForceAtPosition(totalForce, wheelPos, ForceMode.Force);
+        
+        // Сохраняем силу подвески для телеметрии
+        if (wheel == _frontLeftWheel) _suspensionForces[0] = Mathf.Abs(Fy) + Mathf.Abs(normalForce);
+        else if (wheel == _frontRightWheel) _suspensionForces[1] = Mathf.Abs(Fy) + Mathf.Abs(normalForce);
+        else if (wheel == _rearLeftWheel) _suspensionForces[2] = Mathf.Abs(Fy) + Mathf.Abs(normalForce);
+        else if (wheel == _rearRightWheel) _suspensionForces[3] = Mathf.Abs(Fy) + Mathf.Abs(normalForce);
     }
 
     private void ApplyEngineForced()
@@ -278,52 +341,118 @@ public class KartController : MonoBehaviour
         _speedKmh = _speedMs * 3.6f;
     }
     
+    // Метод для расчета силы аэродинамического сопротивления (Drag Force)
+    private float CalculateDragForce()
+    {
+        float speed = _rigidbody.linearVelocity.magnitude;
+        if (speed < 0.01f) return 0f;
+        
+        // Используем параметры из KartAero
+        float airDensity = 1.225f;
+        float dragCoefficient = 0.9f;
+        float frontalArea = 0.6f;
+        
+        return 0.5f * airDensity * dragCoefficient * frontalArea * speed * speed;
+    }
+    
+    // Метод для расчета силы прижима крыла (Downforce)
+    private float CalculateDownforce()
+    {
+        float speed = _rigidbody.linearVelocity.magnitude;
+        if (speed < 0.01f) return 0f;
+        
+        // Используем параметры из KartAero
+        float airDensity = 1.225f;
+        float wingAngleDeg = 10f;
+        float wingArea = 0.4f;
+        float liftCoefficientSlope = 0.05f;
+        
+        float alphaRad = wingAngleDeg * Mathf.Deg2Rad;
+        float Cl = liftCoefficientSlope * alphaRad;
+        
+        return 0.5f * airDensity * Cl * wingArea * speed * speed;
+    }
+    
     private void OnGUI()
     {
-        GUI.Box(new Rect(10, 10, 300, 240), "Kart Telemetry");
-        
+        GUI.Box(new Rect(10, 10, 300, 400), "Kart Telemetry");
+    
         GUIStyle labelStyle = new GUIStyle(GUI.skin.label);
         labelStyle.fontSize = 12;
         labelStyle.normal.textColor = Color.white;
-        
+    
         int yPos = 35;
         int lineHeight = 20;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Speed: {_speedKmh:F1} km/h ({_speedMs:F2} m/s)", labelStyle);
+    
+        // 1. Скорость автомобиля
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Speed: {_speedMs:F2} m/s ({_speedKmh:F1} km/h)", labelStyle);
         yPos += lineHeight;
-        
+    
+        // 2. Обороты двигателя
         GUI.Label(new Rect(20, yPos, 280, 20), $"RPM: {_engine.CurrentRpm:F0}", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Engine Torque: {_engine.CurrentTorque:F1} N·m", labelStyle);
+    
+        // 3. Сила аэродинамического сопротивления
+        float dragForce = CalculateDragForce();
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Drag: {dragForce:F0} N", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Rear Axle Fx: {_totalFxRear:F1} N", labelStyle);
+    
+        // 4. Сила прижима крыла
+        float downforce = CalculateDownforce();
+        GUI.Label(new Rect(20, yPos, 280, 20), $"Downforce: {downforce:F0} N", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Front Axle Fy: {_totalFyFront:F1} N", labelStyle);
+    
+        // 5. Силы подвески на каждом колесе
+        // FL Suspension Force
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FL Suspension: {_suspensionForces[0]:F0} N", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Lateral Slip:", labelStyle);
+    
+        // FR Suspension Force
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FR Suspension: {_suspensionForces[1]:F0} N", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(30, yPos, 130, 20), $"FL: {_frontLeftVLat:F2} m/s", labelStyle);
-        GUI.Label(new Rect(160, yPos, 130, 20), $"FR: {_frontRightVLat:F2} m/s", labelStyle);
+    
+        // RL Suspension Force
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RL Suspension: {_suspensionForces[2]:F0} N", labelStyle);
         yPos += lineHeight;
-        
-        GUI.Label(new Rect(30, yPos, 130, 20), $"RL: {_rearLeftVLat:F2} m/s", labelStyle);
-        GUI.Label(new Rect(160, yPos, 130, 20), $"RR: {_rearRightVLat:F2} m/s", labelStyle);
+    
+        // RR Suspension Force
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RR Suspension: {_suspensionForces[3]:F0} N", labelStyle);
         yPos += lineHeight;
-        
+    
+        // 6. Расстояние от каждого колеса до земли
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FL Distance: {_wheelToGroundDistances[0]:F3} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FR Distance: {_wheelToGroundDistances[1]:F3} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RL Distance: {_wheelToGroundDistances[2]:F3} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RR Distance: {_wheelToGroundDistances[3]:F3} m", labelStyle);
+        yPos += lineHeight;
+    
+        // 7. Степень сжатия подвески каждого колеса
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FL Compression: {_suspensionCompressions[0]:F4} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"FR Compression: {_suspensionCompressions[1]:F4} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RL Compression: {_suspensionCompressions[2]:F4} m", labelStyle);
+        yPos += lineHeight;
+    
+        GUI.Label(new Rect(20, yPos, 280, 20), $"RR Compression: {_suspensionCompressions[3]:F4} m", labelStyle);
+        yPos += lineHeight;
+    
+        // 8. Высота центра масс автомобиля
+        GUI.Label(new Rect(20, yPos, 280, 20), $"COM Height: {_centerOfMassHeight:F3} m", labelStyle);
+        yPos += lineHeight;
+    
+        // Дополнительная информация (если нужно оставить)
         GUI.Label(new Rect(20, yPos, 280, 20), $"Handbrake: {(_isHandbrakeActive ? "ACTIVE" : "inactive")}", 
             new GUIStyle(labelStyle) { 
                 normal = { textColor = _isHandbrakeActive ? Color.red : Color.green } 
             });
-        yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Throttle: {(_throttleInput * 100):F0}%", labelStyle);
-        yPos += lineHeight;
-        
-        GUI.Label(new Rect(20, yPos, 280, 20), $"Steering: {(_steepInput * 100):F0}%", labelStyle);
     }
 }
